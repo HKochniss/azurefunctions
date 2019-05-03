@@ -1,4 +1,3 @@
-
 using Newtonsoft.Json;
 using System.Collections.Generic;
 using System.Net.Http;
@@ -16,12 +15,26 @@ public static class SlackHelper
         string color = SlackColor.Default,
         IEnumerable<SlackMessageAttachmentAction> actions = null)
     {
+        var message = GetSlackMessage(text, title, author, imageUrl, footer, color, actions);
+        await SendSlackNotification(message, hookUrl);
+    }
+
+    public static SlackMessage GetSlackMessage(
+        string text,
+        string title = null,
+        string author = null,
+        string imageUrl = null,
+        string footer = null,
+        string color = SlackColor.Default,
+        IEnumerable<SlackMessageAttachmentAction> actions = null)
+    {
         SlackMessage message = new SlackMessage()
         {
             Attachments = new List<SlackMessageAttachment>()
                 {
                     new SlackMessageAttachment()
                     {
+                        CallbackId = "something",
                         Color = color,
                         Title = title,
                         Text = text,
@@ -34,10 +47,10 @@ public static class SlackHelper
 
         message.Attachments[0].Actions = actions;
 
-        await SendSlackNotification(message, hookUrl);
+        return message;
     }
 
-    public static async Task<HttpResponseMessage> SendSlackNotification(SlackMessage message, string hookUrl)
+        public static async Task<HttpResponseMessage> SendSlackNotification(SlackMessage message, string hookUrl)
     {
         using (HttpClient client = new HttpClient())
         {
@@ -71,6 +84,8 @@ public class SlackMessage
 
 public class SlackMessageAttachment
 {
+    [JsonProperty("callback_id")]
+    public string CallbackId { get; set; }
     [JsonProperty("fallback", NullValueHandling = NullValueHandling.Ignore)]
     public string Fallback { get; set; }
     [JsonProperty("color", NullValueHandling = NullValueHandling.Ignore)]
@@ -114,6 +129,8 @@ public class SlackMessageAttachmentAction
     public string Name { get; set; }
     [JsonProperty("text")]
     public string Text { get; set; }
+    [JsonProperty("value")]
+    public string Value { get; set; }
     [JsonProperty("url")]
     public string Url { get; set; }
     [JsonProperty("style")]

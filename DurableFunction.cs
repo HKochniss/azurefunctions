@@ -1,15 +1,17 @@
 using System;
 using System.Collections.Generic;
+using System.Net;
 using System.Net.Http;
+using System.Text;
 using System.Threading;
 using System.Threading.Tasks;
 using Microsoft.Azure.WebJobs;
 using Microsoft.Azure.WebJobs.Extensions.Http;
 using Microsoft.Extensions.Logging;
+using Newtonsoft.Json;
 
 namespace CloudScheduler.Function
 {
-
     public static class DurableFunction
     {
         [FunctionName(nameof(RunOrchestrator))]
@@ -139,18 +141,20 @@ namespace CloudScheduler.Function
                 actions: new List<SlackMessageAttachmentAction>
                 {
                     new SlackMessageAttachmentAction {
+                        // we don't set an URL for the Action, as this would mean a GET request and a redirect to a browser tab, which sjows the OK response
+                        // instead the button will invoke a POST request against the callback URL that must be configured in the App whose WebHook URL was used to post the Slack message
                         Type = "button",
-                        Name = "travel_request_123456",
+                        Name = $"{context.InstanceId}|{RejectedEventName}",
                         Text = "Reject",
                         Style = "danger",
-                        Url = $"https://{host}/api/HttpRaiseEvent?instanceid={context.InstanceId}&event={RejectedEventName}",
+                        Value = $"{context.InstanceId}|{RejectedEventName}",
                     },
                     new SlackMessageAttachmentAction {
                         Type = "button",
-                        Name = "travel_request_321",
+                        Name = $"{context.InstanceId}|{ApprovalEventName}",
                         Text = "Approve",
                         Style = "primary",
-                        Url = $"https://{host}/api/HttpRaiseEvent?instanceid={context.InstanceId}&event={ApprovalEventName}",
+                        Value = $"{context.InstanceId}|{ApprovalEventName}",
                     },
                 });
         }
@@ -188,7 +192,7 @@ namespace CloudScheduler.Function
             ILogger log)
         {
             var slackHookUrl = Environment.GetEnvironmentVariable("SLACK_HOOK_URL");
-            if(slackHookUrl == null)
+            if (slackHookUrl == null)
             {
                 return new HttpResponseMessage { StatusCode = System.Net.HttpStatusCode.BadRequest, Content = new StringContent("SLACK_HOOK_URL env variable not set") };
             }
@@ -217,6 +221,37 @@ namespace CloudScheduler.Function
             await starter.RaiseEventAsync(instanceId, eventName);
 
             return new HttpResponseMessage { Content = new StringContent("OK") };
+        }
+
+
+        [FunctionName(nameof(HttpRaiseEventFromSlack))]
+        public static async Task<HttpResponseMessage> HttpRaiseEventFromSlack(
+            [HttpTrigger(AuthorizationLevel.Anonymous, "post")]HttpRequestMessage req,
+            [OrchestrationClient]DurableOrchestrationClient starter,
+            ILogger log)
+        {
+            var content = await req.Content.ReadAsStringAsync();
+
+            // see https://api.slack.com/docs/interactive-message-field-guide#option_fields_to_place_within_message_menu_actions
+            var payload = JsonConvert.DeserializeObject<SlackActionRequest>(WebUtility.UrlDecode(content.Substring("payload=".Length)));
+
+            log.LogInformation($"Slack action POST request payload: {JsonConvert.SerializeObject(payload)}");
+            var buttonInfo = payload.actions[0].name;
+            
+            var parts = buttonInfo.Split("|");
+
+            log.LogInformation($"raising event {parts[1]} for instance {parts[0]}");
+            await starter.RaiseEventAsync(parts[0], parts[1]);
+
+            // we would like to reuse to post back payload.original_message (sans the action buttons)
+            // but Slack does provide the picture not as URL but as a fallback name
+            // so we can't re-post the pic, but that's essential for the usecase.. so we rebuild the slack message from scratch
+            var message = SlackHelper.GetSlackMessage($"Is this picture pornographic?",
+                imageUrl: "https://appsfactoryuploads.blob.core.windows.net/public/pics/gerkindick.jpg");
+
+            return new HttpResponseMessage { StatusCode = HttpStatusCode.OK,
+                Content = new StringContent(JsonConvert.SerializeObject(message), Encoding.UTF8, "application/json")
+            };
         }
     }
 }
